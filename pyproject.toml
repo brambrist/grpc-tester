@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grpc-call-tester"
+version = "0.1.0"
+description = "CLIs for testing gRPC and REST calls with JSON payloads"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "grpcio>=1.60",
+    "grpcio-reflection>=1.60",
+    "protobuf>=4.25",
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "grpcio-health-checking>=1.60",
+]
+
+[project.scripts]
+grpc-call = "grpc_call_tester.cli:main"
+rest-call = "grpc_call_tester.rest:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

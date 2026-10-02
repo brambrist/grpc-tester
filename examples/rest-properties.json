@@ -1,0 +1,11 @@
+{
+  "server": "localhost:8443",
+  "endpoint": "/api/v1/items",
+  "method": "POST",
+  "headers": {
+    "Authorization": "Bearer TOKEN"
+  },
+  "payload": {
+    "name": "example"
+  }
+}
