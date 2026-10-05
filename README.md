@@ -74,7 +74,15 @@ It must be the binary output; a `.proto` file or a text/JSON dump passed as `--p
 ### Streaming
 
 - Server-streaming methods: the output is a JSON array of all replies.
-- Client-streaming methods: make the payload a JSON array, one element per request message.
+- Client-streaming methods: put one JSON object per request message in the payload file, one
+  after another (as with grpcurl's `-d`), or make the payload a JSON array of them:
+
+  ```json
+  {"options": {"o1": "test"}}
+  {"data": {"text1": "testtt"}}
+  ```
+
+  A unary or server-streaming method takes exactly one message; more is an error (exit 2).
 
 ### Exit codes
 

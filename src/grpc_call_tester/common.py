@@ -65,12 +65,33 @@ def add_run_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("-o", "--output", metavar="FILE", help="write the reply here instead of stdout")
 
 
-def load_json(path: str):
+def _json_documents(text: str) -> list:
+    """Parse whitespace-separated JSON documents, e.g. '{"a": 1}\\n{"b": 2}'."""
+    decoder = json.JSONDecoder()
+    docs = []
+    pos = 0
+    while True:
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        if pos == len(text) and docs:
+            return docs
+        doc, pos = decoder.raw_decode(text, pos)
+        docs.append(doc)
+
+
+def load_json(path: str, multiple: bool = False):
+    """Load one JSON document; with multiple, the file may hold several back to back, and
+    then a list of them is returned."""
     try:
         if path == "-":
             path = "<stdin>"
-            return json.loads(sys.stdin.read())
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+            text = sys.stdin.read()
+        else:
+            text = Path(path).read_text(encoding="utf-8")
+        if not multiple:
+            return json.loads(text)
+        docs = _json_documents(text)
+        return docs[0] if len(docs) == 1 else docs
     except OSError as e:
         raise UsageError(f"cannot read {path}: {e.strerror}") from e
     except json.JSONDecodeError as e:
@@ -86,9 +107,10 @@ def read_bytes(path: str | None) -> bytes | None:
         raise UsageError(f"cannot read {path}: {e.strerror}") from e
 
 
-def resolve_call(args, payload_required: bool = True) -> dict:
+def resolve_call(args, payload_required: bool = True, payload_stream: bool = False) -> dict:
     """Return the call as a dict with server, endpoint and payload, taken from either
-    the properties file (any extra keys in it are kept) or the separate options."""
+    the properties file (any extra keys in it are kept) or the separate options.
+    With payload_stream, a payload file holding several JSON documents gives a list of them."""
     required = ["server", "endpoint"] + (["payload"] if payload_required else [])
     separate = {"server": args.server, "endpoint": args.endpoint, "payload": args.payload_file}
 
@@ -111,7 +133,7 @@ def resolve_call(args, payload_required: bool = True) -> dict:
         raise UsageError(
             f"need --properties-file, or all of {', '.join(flag(k) for k in required)} (missing: {', '.join(missing)})"
         )
-    payload = load_json(args.payload_file) if args.payload_file else None
+    payload = load_json(args.payload_file, multiple=payload_stream) if args.payload_file else None
     return {"server": args.server, "endpoint": args.endpoint, "payload": payload}
 
 

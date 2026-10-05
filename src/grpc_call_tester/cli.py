@@ -199,7 +199,7 @@ def invoke(channel: grpc.Channel, method, payload, timeout: float):
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        call = resolve_call(args)
+        call = resolve_call(args, payload_stream=True)
         server = call["server"]
         if args.import_path and not args.proto:
             raise UsageError("--import-path only applies to --proto")

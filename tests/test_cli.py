@@ -4,7 +4,7 @@ from concurrent import futures
 
 import grpc
 import pytest
-from google.protobuf import descriptor_pb2
+from google.protobuf import descriptor_pb2, json_format, struct_pb2
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 from grpc_reflection.v1alpha import reflection
 
@@ -209,6 +209,73 @@ def test_proto_and_protoset_exclusive(plain_server, payload_file, tmp_path, caps
         _call_with(plain_server, payload_file, "--proto", "a.proto", "--protoset", "a.protoset")
     assert e.value.code == 2
     assert "not allowed with" in capsys.readouterr().err
+
+
+COLLECT_PROTO = """
+syntax = "proto3";
+package test;
+import "google/protobuf/struct.proto";
+service Collect {
+  rpc Collect(stream google.protobuf.Struct) returns (google.protobuf.Struct);
+}
+"""
+
+
+@pytest.fixture
+def collect_server(tmp_path):
+    """A client-streaming service that replies with every message it got, as {"messages": [...]}."""
+
+    def collect(requests, context):
+        reply = struct_pb2.Struct()
+        reply.get_or_create_list("messages").extend([json_format.MessageToDict(r) for r in requests])
+        return reply
+
+    handler = grpc.method_handlers_generic_handler(
+        "test.Collect",
+        {
+            "Collect": grpc.stream_unary_rpc_method_handler(
+                collect,
+                request_deserializer=struct_pb2.Struct.FromString,
+                response_serializer=struct_pb2.Struct.SerializeToString,
+            )
+        },
+    )
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), handlers=[handler])
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    proto = tmp_path / "collect.proto"
+    proto.write_text(COLLECT_PROTO)
+    yield f"127.0.0.1:{port}", str(proto)
+    server.stop(None)
+
+
+def test_payload_with_several_messages(collect_server, tmp_path, capsys):
+    address, proto = collect_server
+    payload = tmp_path / "payload.json"
+    payload.write_text('{ "options": {"o1": "test"} }\n{"data": {"text1": "testtt"}}\n')
+    rc = main(
+        ["--plaintext", "--server", address, "--endpoint", "test.Collect/Collect"]
+        + ["--payload-file", str(payload), "--proto", proto]
+    )
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "messages": [{"options": {"o1": "test"}}, {"data": {"text1": "testtt"}}]
+    }
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        ('{"service": ""}\n{"service": ""}', "takes one request message, payload has 2"),
+        ('{"service": ""}\n{"service": ', "not valid JSON"),
+        ("", "not valid JSON"),
+    ],
+)
+def test_bad_message_sequence(plain_server, tmp_path, capsys, payload, expected):
+    path = tmp_path / "payload.json"
+    path.write_text(payload)
+    assert _call_with(plain_server, str(path)) == 2
+    assert expected in capsys.readouterr().err
 
 
 def test_properties_file_excludes_separate_options(tmp_path, capsys):
