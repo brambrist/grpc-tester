@@ -4,6 +4,7 @@ from concurrent import futures
 
 import grpc
 import pytest
+from google.protobuf import descriptor_pb2
 from grpc_health.v1 import health, health_pb2, health_pb2_grpc
 from grpc_reflection.v1alpha import reflection
 
@@ -102,6 +103,112 @@ def test_bad_input(plain_server, tmp_path, capsys, endpoint, payload, expected):
     rc = main(["--plaintext", "--server", plain_server, "--endpoint", endpoint, "--payload-file", str(path)])
     assert rc == 2
     assert expected in capsys.readouterr().err
+
+
+def _protoset_without_imports():
+    fds = descriptor_pb2.FileDescriptorSet()
+    fds.file.add(name="a.proto", package="x", dependency=["google/protobuf/empty.proto"])
+    return fds.SerializeToString()
+
+
+@pytest.mark.parametrize(
+    "content, expected",
+    [
+        (b'syntax = "proto3";\npackage x;\n', "not a binary descriptor set"),
+        (_protoset_without_imports(), "--include_imports"),
+    ],
+)
+def test_bad_protoset(plain_server, payload_file, tmp_path, capsys, content, expected):
+    protoset = tmp_path / "api.protoset"
+    protoset.write_bytes(content)
+    rc = main(
+        ["--plaintext", "--server", plain_server, "--endpoint", ENDPOINT, "--payload-file", payload_file]
+        + ["--protoset", str(protoset)]
+    )
+    assert rc == 2
+    assert expected in capsys.readouterr().err
+
+
+HEALTH_PROTO = """
+syntax = "proto3";
+package grpc.health.v1;
+import "google/protobuf/empty.proto";
+import "messages.proto";
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+  rpc Unused(google.protobuf.Empty) returns (google.protobuf.Empty);
+}
+"""
+
+MESSAGES_PROTO = """
+syntax = "proto3";
+package grpc.health.v1;
+message HealthCheckRequest { string service = 1; }
+message HealthCheckResponse {
+  enum ServingStatus { UNKNOWN = 0; SERVING = 1; NOT_SERVING = 2; SERVICE_UNKNOWN = 3; }
+  ServingStatus status = 1;
+}
+"""
+
+
+@pytest.fixture
+def proto_dir(tmp_path):
+    """health.proto in api/, importing messages.proto from shared/."""
+    (tmp_path / "api").mkdir()
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "api" / "health.proto").write_text(HEALTH_PROTO)
+    (tmp_path / "shared" / "messages.proto").write_text(MESSAGES_PROTO)
+    return tmp_path
+
+
+def _call_with(plain_server, payload_file, *extra):
+    return main(
+        ["--plaintext", "--server", plain_server, "--endpoint", ENDPOINT, "--payload-file", payload_file, *extra]
+    )
+
+
+def test_proto_source(plain_server, payload_file, proto_dir, capsys):
+    api, shared = proto_dir / "api", proto_dir / "shared"
+    rc = _call_with(plain_server, payload_file, "--proto", str(api / "health.proto"), "-I", str(api), "-I", str(shared))
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {"status": "SERVING"}
+
+
+def test_proto_default_import_path(plain_server, payload_file, tmp_path, capsys):
+    (tmp_path / "health.proto").write_text(HEALTH_PROTO)
+    (tmp_path / "messages.proto").write_text(MESSAGES_PROTO)
+    rc = _call_with(plain_server, payload_file, "--proto", str(tmp_path / "health.proto"))
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {"status": "SERVING"}
+
+
+@pytest.mark.parametrize(
+    "proto, extra, expected",
+    [
+        ('syntax = "proto3";\nmessage {', [], "cannot compile"),
+        (HEALTH_PROTO, [], "cannot compile"),  # messages.proto is not on the import path
+        (None, [], "no such file"),
+    ],
+)
+def test_bad_proto(plain_server, payload_file, tmp_path, capsys, proto, extra, expected):
+    path = tmp_path / "api.proto"
+    if proto is not None:
+        path.write_text(proto)
+    rc = _call_with(plain_server, payload_file, "--proto", str(path), *extra)
+    assert rc == 2
+    assert expected in capsys.readouterr().err
+
+
+def test_import_path_needs_proto(plain_server, payload_file, tmp_path, capsys):
+    assert _call_with(plain_server, payload_file, "-I", str(tmp_path)) == 2
+    assert "only applies to --proto" in capsys.readouterr().err
+
+
+def test_proto_and_protoset_exclusive(plain_server, payload_file, tmp_path, capsys):
+    with pytest.raises(SystemExit) as e:
+        _call_with(plain_server, payload_file, "--proto", "a.proto", "--protoset", "a.protoset")
+    assert e.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err
 
 
 def test_properties_file_excludes_separate_options(tmp_path, capsys):

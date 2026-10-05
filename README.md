@@ -4,7 +4,8 @@ Two small CLIs for call testing: `grpc-call` sends a JSON payload to a gRPC endp
 prints the reply as JSON, and `rest-call` does the same for REST APIs (see [REST calls](#rest-calls)).
 
 Message types are discovered through **server reflection**, so no `.proto` files are needed.
-If the server has reflection disabled, pass a compiled descriptor set with `--protoset`.
+If the server has reflection disabled, pass the `.proto` files with `--proto`, or a compiled
+descriptor set with `--protoset`.
 
 ## Install
 
@@ -53,9 +54,22 @@ grpc-call --ca-cert ca.pem --client-cert client.pem --client-key client.key \
 | `--timeout SEC` | Deadline for the call (default 30). |
 | `--connect-timeout SEC` | How long to wait for the connection (default 10). |
 | `-o`, `--output FILE` | Write the reply to a file instead of stdout. |
-| `--protoset FILE` | Take message types from a descriptor set instead of reflection. |
+| `--proto FILE` | Take message types from a `.proto` source file instead of reflection (repeatable). |
+| `-I`, `--import-path DIR` | Where `--proto` imports are looked up (repeatable; default: each `--proto` file's directory). |
+| `--protoset FILE` | Take message types from a compiled descriptor set instead of reflection. |
+
+`--proto` files are compiled on the fly with the protoc bundled in `grpcio-tools`, so protoc
+doesn't need to be installed. The well-known types (`google/protobuf/*.proto`) are always
+importable. `--proto` and `--protoset` are mutually exclusive.
+
+```sh
+grpc-call --plaintext --server localhost:50051 \
+  --proto protos/api/service.proto -I protos/api -I protos/common \
+  --endpoint my.package.MyService/MyMethod --payload-file payload.json
+```
 
 A descriptor set is built with `protoc --include_imports --descriptor_set_out=api.protoset api.proto`.
+It must be the binary output; a `.proto` file or a text/JSON dump passed as `--protoset` is rejected.
 
 ### Streaming
 

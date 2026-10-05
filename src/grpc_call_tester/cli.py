@@ -5,11 +5,16 @@ import json
 import socket
 import ssl
 import sys
+import tempfile
+from importlib import resources
+from pathlib import Path
 
 import grpc
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from google.protobuf import descriptor_pb2, descriptor_pool, json_format, message_factory
+from google.protobuf.message import DecodeError
+from grpc_tools import protoc
 from grpc_reflection.v1alpha.proto_reflection_descriptor_database import (
     ProtoReflectionDescriptorDatabase,
 )
@@ -40,11 +45,21 @@ def build_parser() -> argparse.ArgumentParser:
         endpoint_metavar="PKG.SERVICE/METHOD",
         properties_help='JSON file of the form {"server": ..., "endpoint": ..., "payload": {...}}',
     )
-    p.add_argument(
-        "--protoset",
+    types = p.add_argument_group("message types (default: ask the server via reflection)")
+    source = types.add_mutually_exclusive_group()
+    source.add_argument("--protoset", metavar="FILE", help="compiled FileDescriptorSet to take message types from")
+    source.add_argument(
+        "--proto",
         metavar="FILE",
-        help="compiled FileDescriptorSet to take message types from "
-        "(default: ask the server via reflection)",
+        action="append",
+        help=".proto source file to take message types from (repeatable)",
+    )
+    types.add_argument(
+        "-I",
+        "--import-path",
+        metavar="DIR",
+        action="append",
+        help="directory to resolve --proto imports from (repeatable; default: each --proto file's directory)",
     )
     add_run_arguments(p)
     return p
@@ -101,22 +116,53 @@ def open_channel(server: str, args) -> grpc.Channel:
     return grpc.secure_channel(server, creds, options=options)
 
 
-def find_method(channel: grpc.Channel, endpoint: str, protoset: str | None):
+def compile_protos(protos: list[str], import_paths: list[str] | None) -> bytes:
+    """Run the bundled protoc over .proto files and return the FileDescriptorSet it builds."""
+    for proto in protos:
+        if not Path(proto).is_file():
+            raise UsageError(f"cannot read {proto}: no such file")
+    if not import_paths:
+        import_paths = list(dict.fromkeys(str(Path(proto).parent) for proto in protos))
+    # protoc doesn't know where google/protobuf/*.proto live; grpc_tools ships them.
+    well_known = str(resources.files("grpc_tools") / "_proto")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "protoset"
+        argv = ["protoc", "--include_imports", f"--descriptor_set_out={out}"]
+        argv += [f"-I{d}" for d in import_paths] + [f"-I{well_known}"] + protos
+        # protoc prints its own diagnostics to stderr.
+        if protoc.main(argv) != 0:
+            raise UsageError(f"cannot compile {', '.join(protos)}")
+        return out.read_bytes()
+
+
+def find_method(channel: grpc.Channel, endpoint: str, descriptors: bytes | None, source: str):
+    """Look the method up in descriptors (a serialized FileDescriptorSet read from source),
+    or via server reflection when descriptors is None."""
     service_name, _, method_name = endpoint.lstrip("/").rpartition("/")
     if not service_name or not method_name:
         raise UsageError(f"endpoint must look like package.Service/Method, got {endpoint!r}")
 
-    if protoset:
+    if descriptors is not None:
+        try:
+            file_set = descriptor_pb2.FileDescriptorSet.FromString(descriptors)
+        except DecodeError:
+            raise UsageError(
+                f"{source} is not a binary descriptor set "
+                "(build one with protoc --include_imports --descriptor_set_out=FILE, or use --proto)"
+            ) from None
         pool = descriptor_pool.DescriptorPool()
-        for file_proto in descriptor_pb2.FileDescriptorSet.FromString(read_bytes(protoset)).file:
-            pool.Add(file_proto)
+        for file_proto in file_set.file:
+            try:
+                pool.Add(file_proto)
+            except TypeError as e:
+                raise UsageError(f"{source}: {e} (was it built with --include_imports?)") from None
     else:
         pool = descriptor_pool.DescriptorPool(ProtoReflectionDescriptorDatabase(channel))
 
     try:
         service = pool.FindServiceByName(service_name)
     except KeyError:
-        source = protoset or "server reflection"
         raise UsageError(f"service {service_name!r} not found via {source}") from None
     method = service.methods_by_name.get(method_name)
     if method is None:
@@ -155,13 +201,22 @@ def main(argv: list[str] | None = None) -> int:
     try:
         call = resolve_call(args)
         server = call["server"]
+        if args.import_path and not args.proto:
+            raise UsageError("--import-path only applies to --proto")
+        # Compile before connecting, so a broken .proto fails fast.
+        if args.proto:
+            descriptors, source = compile_protos(args.proto, args.import_path), ", ".join(args.proto)
+        elif args.protoset:
+            descriptors, source = read_bytes(args.protoset), args.protoset
+        else:
+            descriptors, source = None, "server reflection"
         with open_channel(server, args) as channel:
             try:
                 grpc.channel_ready_future(channel).result(timeout=args.connect_timeout)
             except grpc.FutureTimeoutError:
                 print(f"error: could not connect to {server} within {args.connect_timeout:g}s", file=sys.stderr)
                 return EXIT_CALL_FAILED
-            method = find_method(channel, call["endpoint"], args.protoset)
+            method = find_method(channel, call["endpoint"], descriptors, source)
             reply = invoke(channel, method, call["payload"], args.timeout)
     except UsageError as e:
         print(f"error: {e}", file=sys.stderr)
