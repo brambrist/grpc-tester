@@ -142,13 +142,19 @@ def check_client_cert_pair(args) -> None:
         raise UsageError("--client-cert and --client-key must be given together")
 
 
-def write_reply(text: str, output: str | None) -> int:
+def write_reply(reply: str | bytes, output: str | None) -> int:
+    """Write the reply to output, or stdout; bytes are written as they are."""
+    data = reply if isinstance(reply, bytes) else reply.encode("utf-8")
     if output:
         try:
-            Path(output).write_text(text, encoding="utf-8")
+            Path(output).write_bytes(data)
         except OSError as e:
             print(f"error: cannot write {output}: {e.strerror}", file=sys.stderr)
             return EXIT_USAGE
+    elif isinstance(reply, bytes):
+        sys.stdout.flush()
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
     else:
-        sys.stdout.write(text)
+        sys.stdout.write(reply)
     return 0

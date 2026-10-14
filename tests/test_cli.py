@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 from concurrent import futures
@@ -341,3 +342,92 @@ def test_properties_from_stdin(plain_server, capsys, monkeypatch):
     rc = main(["--plaintext", "--properties-file", "-"])
     assert rc == 0
     assert json.loads(capsys.readouterr().out) == {"status": "SERVING"}
+
+
+CHUNKS_PROTO = """
+syntax = "proto3";
+package test;
+import "google/protobuf/struct.proto";
+service Chunks {
+  rpc Get(google.protobuf.Struct) returns (stream google.protobuf.Struct);
+}
+"""
+
+
+@pytest.fixture
+def chunks_server(tmp_path):
+    """A server-streaming service that sends each element of the request's "replies" back as a reply."""
+
+    def get(request, context):
+        for item in json_format.MessageToDict(request)["replies"]:
+            reply = struct_pb2.Struct()
+            reply.update(item)
+            yield reply
+
+    handler = grpc.method_handlers_generic_handler(
+        "test.Chunks",
+        {
+            "Get": grpc.unary_stream_rpc_method_handler(
+                get,
+                request_deserializer=struct_pb2.Struct.FromString,
+                response_serializer=struct_pb2.Struct.SerializeToString,
+            )
+        },
+    )
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4), handlers=[handler])
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    proto = tmp_path / "chunks.proto"
+    proto.write_text(CHUNKS_PROTO)
+    yield f"127.0.0.1:{port}", str(proto)
+    server.stop(None)
+
+
+def _get_chunks(chunks_server, tmp_path, replies, *extra):
+    address, proto = chunks_server
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({"replies": replies}))
+    return main(
+        ["--plaintext", "--server", address, "--endpoint", "test.Chunks/Get"]
+        + ["--payload-file", str(payload), "--proto", proto, *extra]
+    )
+
+
+def test_field_base64_concatenated(chunks_server, tmp_path, capsys):
+    data = bytes(range(256)) * 3
+    parts = [data[:100], data[100:500], data[500:]]
+    replies = [{"A1": base64.b64encode(p).decode(), "seq": i} for i, p in enumerate(parts)]
+    replies.insert(1, {"seq": 99})  # replies without the field are skipped
+    out = tmp_path / "out.bin"
+    rc = _get_chunks(chunks_server, tmp_path, replies, "--field", "A1", "-b64", "-o", str(out))
+    assert rc == 0
+    assert out.read_bytes() == data
+    assert capsys.readouterr().out == ""
+
+
+def test_field_text_to_stdout(chunks_server, tmp_path, capsysbinary):
+    replies = [{"meta": {"text": "hello "}}, {"meta": {"text": ["wor", "ld"]}}]
+    rc = _get_chunks(chunks_server, tmp_path, replies, "--field", "meta.text")
+    assert rc == 0
+    assert capsysbinary.readouterr().out == b"hello world"
+
+
+def test_field_url_safe_base64(chunks_server, tmp_path):
+    out = tmp_path / "out.bin"
+    rc = _get_chunks(chunks_server, tmp_path, [{"A1": "-_8"}], "--field", "A1", "--b64", "-o", str(out))
+    assert rc == 0
+    assert out.read_bytes() == b"\xfb\xff"
+
+
+@pytest.mark.parametrize(
+    "replies, extra, expected",
+    [
+        ([{"A1": "aGk="}], ["--field", "B2"], "no reply has a field 'B2'"),
+        ([{"A1": "not base64!"}], ["--field", "A1", "--b64"], "not valid base64"),
+        ([{"A1": 5}], ["--field", "A1", "--b64"], "not a string"),
+        ([{"A1": "aGk="}], ["--b64"], "--b64 only applies to --field"),
+    ],
+)
+def test_bad_field(chunks_server, tmp_path, capsys, replies, extra, expected):
+    assert _get_chunks(chunks_server, tmp_path, replies, *extra) == 2
+    assert expected in capsys.readouterr().err

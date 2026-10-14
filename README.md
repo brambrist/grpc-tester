@@ -57,6 +57,8 @@ grpc-call --ca-cert ca.pem --client-cert client.pem --client-key client.key \
 | `--proto FILE` | Take message types from a `.proto` source file instead of reflection (repeatable). |
 | `-I`, `--import-path DIR` | Where `--proto` imports are looked up (repeatable; default: each `--proto` file's directory). |
 | `--protoset FILE` | Take message types from a compiled descriptor set instead of reflection. |
+| `--field NAME` | Write only this field of the reply; values from a server stream are concatenated (see [Extracting a field](#extracting-a-field)). |
+| `-b64`, `--b64` | Base64-decode the `--field` values. |
 
 `--proto` files are compiled on the fly with the protoc bundled in `grpcio-tools`, so protoc
 doesn't need to be installed. The well-known types (`google/protobuf/*.proto`) are always
@@ -83,6 +85,25 @@ It must be the binary output; a `.proto` file or a text/JSON dump passed as `--p
   ```
 
   A unary or server-streaming method takes exactly one message; more is an error (exit 2).
+
+### Extracting a field
+
+`--field NAME` writes only that field of the reply instead of the whole JSON, and `--b64`
+(or `-b64`) base64-decodes it first. With a server-streaming method the field's values from
+all replies are concatenated in order, which reassembles a file sent in chunks:
+
+```sh
+grpc-call --plaintext --server localhost:50051 \
+  --endpoint my.package.Files/Download --payload-file payload.json \
+  --field A1 -b64 -o file.bin
+```
+
+- `a.b` picks a nested field. Both the proto name (`chunk_data`) and its JSON name (`chunkData`) work.
+- `bytes` fields always come out as base64 in JSON, so use `--b64` to get the raw bytes.
+- A repeated field contributes all of its values.
+- Replies without the field are skipped, because protobuf leaves empty values out. If no reply
+  has the field at all, that's an error (exit 2), and so is a value that isn't valid base64.
+- Without `--b64`, string values are written as they are and anything else as JSON.
 
 ### Exit codes
 
