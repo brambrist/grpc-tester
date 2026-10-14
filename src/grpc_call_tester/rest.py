@@ -13,9 +13,13 @@ from grpc_call_tester.common import (
     EXIT_USAGE,
     UsageError,
     add_call_arguments,
+    add_extract_arguments,
     add_run_arguments,
     add_tls_arguments,
     check_client_cert_pair,
+    check_extract_arguments,
+    extract_field,
+    json_documents,
     resolve_call,
     write_reply,
 )
@@ -44,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="extra request header, repeatable",
     )
     add_run_arguments(p)
+    add_extract_arguments(p)
     return p
 
 
@@ -95,9 +100,12 @@ def open_connection(server: str, args) -> tuple[http.client.HTTPConnection, str]
         raise UsageError(f"bad server {server!r}: {e}") from e
 
 
-def format_body(response: http.client.HTTPResponse, data: bytes) -> str:
+def decode_body(response: http.client.HTTPResponse, data: bytes) -> str:
+    return data.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+
+
+def format_body(text: str) -> str:
     """Pretty-print JSON replies; pass anything else through as text."""
-    text = data.decode(response.headers.get_content_charset() or "utf-8", errors="replace")
     try:
         return json.dumps(json.loads(text), indent=2, ensure_ascii=False) + "\n"
     except ValueError:
@@ -107,6 +115,7 @@ def format_body(response: http.client.HTTPResponse, data: bytes) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        check_extract_arguments(args)
         call = resolve_call(args, payload_required=False)
         payload = call["payload"]
         method = (args.method or call.get("method") or ("GET" if payload is None else "POST")).upper()
@@ -132,16 +141,28 @@ def main(argv: list[str] | None = None) -> int:
             connection.sock.settimeout(args.timeout)
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
-            text = format_body(response, response.read())
+            text = decode_body(response, response.read())
         except (OSError, http.client.HTTPException) as e:
             print(f"error: {method} {path} failed: {e or type(e).__name__}", file=sys.stderr)
             return EXIT_CALL_FAILED
 
     if not 200 <= response.status < 300:
         print(f"HTTP error: {response.status} {response.reason}", file=sys.stderr)
-        sys.stderr.write(text)
+        sys.stderr.write(format_body(text))
         return EXIT_CALL_FAILED
-    return write_reply(text, args.output)
+    if args.field:
+        try:
+            # Newline-delimited JSON (one object per line) counts as several replies.
+            docs = json_documents(text)
+            reply = extract_field(docs[0] if len(docs) == 1 else docs, args.field, args.b64)
+        except ValueError:
+            print("error: the reply is not JSON, cannot extract --field", file=sys.stderr)
+            return EXIT_USAGE
+        except UsageError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return EXIT_USAGE
+        return write_reply(reply, args.output)
+    return write_reply(format_body(text), args.output)
 
 
 if __name__ == "__main__":

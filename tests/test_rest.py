@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import ssl
@@ -29,6 +30,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._reply(404, {"error": "no such thing"})
         elif self.path == "/text":
             self._reply(200, b"plain reply", "text/plain")
+        elif self.path == "/echo":
+            self._reply(200, body)
+        elif self.path == "/ndjson":
+            self._reply(200, "".join(json.dumps(item) + "\n" for item in body).encode(), "application/x-ndjson")
         elif self.path == "/slow":
             time.sleep(2)
             self._reply(200, {})
@@ -194,3 +199,40 @@ def test_skip_verify(mtls_server, capsys):
     )
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["method"] == "GET"
+
+
+def _call(plain_server, tmp_path, endpoint, payload, *extra):
+    path = tmp_path / "payload.json"
+    path.write_text(json.dumps(payload))
+    return main(["--server", f"http://{plain_server}", "--endpoint", endpoint, "--payload-file", str(path), *extra])
+
+
+def test_field_base64(plain_server, tmp_path, capsys):
+    out = tmp_path / "out.bin"
+    payload = {"data": {"A1": base64.b64encode(b"\x00\xffbinary").decode()}}
+    rc = _call(plain_server, tmp_path, "/echo", payload, "--field", "data.A1", "-b64", "-o", str(out))
+    assert rc == 0
+    assert out.read_bytes() == b"\x00\xffbinary"
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("endpoint", ["/echo", "/ndjson"])
+def test_field_concatenated(plain_server, tmp_path, capsysbinary, endpoint):
+    # A JSON array of replies and newline-delimited JSON are treated alike.
+    payload = [{"A1": "aGVs"}, {"other": 1}, {"A1": "bG8="}]
+    rc = _call(plain_server, tmp_path, endpoint, payload, "--field", "A1", "--b64")
+    assert rc == 0
+    assert capsysbinary.readouterr().out == b"hello"
+
+
+@pytest.mark.parametrize(
+    "endpoint, extra, expected",
+    [
+        ("/text", ["--field", "A1"], "reply is not JSON"),
+        ("/echo", ["--field", "B2"], "no reply has a field 'B2'"),
+        ("/echo", ["--b64"], "--b64 only applies to --field"),
+    ],
+)
+def test_bad_field(plain_server, tmp_path, capsys, endpoint, extra, expected):
+    assert _call(plain_server, tmp_path, endpoint, {"A1": "aGk="}, *extra) == 2
+    assert expected in capsys.readouterr().err

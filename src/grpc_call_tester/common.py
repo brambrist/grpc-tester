@@ -1,6 +1,8 @@
 """Options and input handling shared by the grpc-call and rest-call commands."""
 
 import argparse
+import base64
+import binascii
 import json
 import os
 import sys
@@ -65,7 +67,23 @@ def add_run_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("-o", "--output", metavar="FILE", help="write the reply here instead of stdout")
 
 
-def _json_documents(text: str) -> list:
+def add_extract_arguments(p: argparse.ArgumentParser) -> None:
+    extract = p.add_argument_group("field extraction")
+    extract.add_argument(
+        "--field",
+        metavar="NAME",
+        help="write only this field of the reply (a.b for nested fields); with several replies, "
+        "its values from all of them are concatenated",
+    )
+    extract.add_argument("-b64", "--b64", action="store_true", help="base64-decode the --field values")
+
+
+def check_extract_arguments(args) -> None:
+    if args.b64 and not args.field:
+        raise UsageError("--b64 only applies to --field")
+
+
+def json_documents(text: str) -> list:
     """Parse whitespace-separated JSON documents, e.g. '{"a": 1}\\n{"b": 2}'."""
     decoder = json.JSONDecoder()
     docs = []
@@ -90,7 +108,7 @@ def load_json(path: str, multiple: bool = False):
             text = Path(path).read_text(encoding="utf-8")
         if not multiple:
             return json.loads(text)
-        docs = _json_documents(text)
+        docs = json_documents(text)
         return docs[0] if len(docs) == 1 else docs
     except OSError as e:
         raise UsageError(f"cannot read {path}: {e.strerror}") from e
@@ -140,6 +158,53 @@ def resolve_call(args, payload_required: bool = True, payload_stream: bool = Fal
 def check_client_cert_pair(args) -> None:
     if bool(args.client_cert) != bool(args.client_key):
         raise UsageError("--client-cert and --client-key must be given together")
+
+
+def _json_name(name: str) -> str:
+    """lowerCamelCase name protobuf uses in JSON, e.g. chunk_data -> chunkData."""
+    head, *rest = name.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def _lookup(message, path: list[str]):
+    """Follow path into a reply dict; returns None when a field is absent."""
+    value = message
+    for name in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(name, value.get(_json_name(name)))
+    return value
+
+
+def _decode_b64(value: str, field: str) -> bytes:
+    # protobuf writes standard base64 but also accepts URL-safe input, so do the same.
+    value = value.replace("-", "+").replace("_", "/")
+    try:
+        return base64.b64decode(value + "=" * (-len(value) % 4), validate=True)
+    except binascii.Error as e:
+        raise UsageError(f"field {field} is not valid base64: {e}") from None
+
+
+def extract_field(reply, field: str, b64: bool) -> bytes:
+    """Concatenate the field's values from the reply (a dict, or a list of them, e.g. from a
+    server stream). A repeated field contributes all its values. Replies without the field are
+    skipped, since protobuf leaves out empty values."""
+    messages = reply if isinstance(reply, list) else [reply]
+    values = [v for v in (_lookup(m, field.split(".")) for m in messages) if v is not None]
+    if not values:
+        raise UsageError(f"no reply has a field {field!r}")
+    out = bytearray()
+    for value in values:
+        for item in value if isinstance(value, list) else [value]:
+            if b64:
+                if not isinstance(item, str):
+                    raise UsageError(f"field {field} is not a string, cannot base64-decode it")
+                out += _decode_b64(item, field)
+            elif isinstance(item, str):
+                out += item.encode()
+            else:
+                out += json.dumps(item, ensure_ascii=False).encode()
+    return bytes(out)
 
 
 def write_reply(reply: str | bytes, output: str | None) -> int:

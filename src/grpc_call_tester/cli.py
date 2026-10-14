@@ -1,8 +1,6 @@
 """grpc-call: send a JSON payload to a gRPC endpoint and print the reply."""
 
 import argparse
-import base64
-import binascii
 import json
 import socket
 import ssl
@@ -26,9 +24,12 @@ from grpc_call_tester.common import (
     EXIT_USAGE,
     UsageError,
     add_call_arguments,
+    add_extract_arguments,
     add_run_arguments,
     add_tls_arguments,
     check_client_cert_pair,
+    check_extract_arguments,
+    extract_field,
     read_bytes,
     resolve_call,
     write_reply,
@@ -64,14 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory to resolve --proto imports from (repeatable; default: each --proto file's directory)",
     )
     add_run_arguments(p)
-    extract = p.add_argument_group("field extraction")
-    extract.add_argument(
-        "--field",
-        metavar="NAME",
-        help="write only this field of the reply (a.b for nested fields); with a server stream, "
-        "its values from all replies are concatenated",
-    )
-    extract.add_argument("-b64", "--b64", action="store_true", help="base64-decode the --field values")
+    add_extract_arguments(p)
     return p
 
 
@@ -206,53 +200,6 @@ def invoke(channel: grpc.Channel, method, payload, timeout: float):
     return json_format.MessageToDict(result)
 
 
-def _json_name(name: str) -> str:
-    """lowerCamelCase name protobuf uses in JSON, e.g. chunk_data -> chunkData."""
-    head, *rest = name.split("_")
-    return head + "".join(part[:1].upper() + part[1:] for part in rest)
-
-
-def _lookup(message, path: list[str]):
-    """Follow path into a reply dict; returns None when a field is absent."""
-    value = message
-    for name in path:
-        if not isinstance(value, dict):
-            return None
-        value = value.get(name, value.get(_json_name(name)))
-    return value
-
-
-def _decode_b64(value: str, field: str) -> bytes:
-    # protobuf writes standard base64 but also accepts URL-safe input, so do the same.
-    value = value.replace("-", "+").replace("_", "/")
-    try:
-        return base64.b64decode(value + "=" * (-len(value) % 4), validate=True)
-    except binascii.Error as e:
-        raise UsageError(f"field {field} is not valid base64: {e}") from None
-
-
-def extract_field(reply, field: str, b64: bool) -> bytes:
-    """Concatenate the field's values from the reply (a dict, or a list of them for a server
-    stream). A repeated field contributes all its values. Replies without the field are
-    skipped, since protobuf leaves out empty values."""
-    messages = reply if isinstance(reply, list) else [reply]
-    values = [v for v in (_lookup(m, field.split(".")) for m in messages) if v is not None]
-    if not values:
-        raise UsageError(f"no reply has a field {field!r}")
-    out = bytearray()
-    for value in values:
-        for item in value if isinstance(value, list) else [value]:
-            if b64:
-                if not isinstance(item, str):
-                    raise UsageError(f"field {field} is not a string, cannot base64-decode it")
-                out += _decode_b64(item, field)
-            elif isinstance(item, str):
-                out += item.encode()
-            else:
-                out += json.dumps(item, ensure_ascii=False).encode()
-    return bytes(out)
-
-
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -260,8 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         server = call["server"]
         if args.import_path and not args.proto:
             raise UsageError("--import-path only applies to --proto")
-        if args.b64 and not args.field:
-            raise UsageError("--b64 only applies to --field")
+        check_extract_arguments(args)
         # Compile before connecting, so a broken .proto fails fast.
         if args.proto:
             descriptors, source = compile_protos(args.proto, args.import_path), ", ".join(args.proto)

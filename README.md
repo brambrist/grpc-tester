@@ -115,14 +115,16 @@ grpc-call --plaintext --server localhost:50051 \
 
 ## REST calls
 
-`rest-call` does the same for REST/JSON APIs. The TLS, timeout, output and properties-file
-options are identical to `grpc-call`; the differences are:
+`rest-call` does the same for REST/JSON APIs. The TLS, timeout, output, properties-file and
+`--field` / `--b64` options are identical to `grpc-call`; the differences are:
 
 - `--endpoint` is the request path (query string included), e.g. `/api/v1/items?limit=10`.
 - `--payload-file` is optional. The method defaults to `POST` with a payload and `GET`
   without; override it with `-X` / `--method`.
 - `-H 'Name: value'` adds a request header (repeatable).
 - `--server` may be `host:port` or a URL such as `https://host/base`; `http://` implies `--plaintext`.
+- With `--field`, a reply that is a JSON array, or newline-delimited JSON (one object per
+  line), counts as several replies whose values are concatenated. A reply that isn't JSON is an error (exit 2).
 
 ```sh
 rest-call --ca-cert ca.pem --client-cert client.pem --client-key client.key \
