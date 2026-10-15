@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yamlmap</title>
+<style>
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface2: #f0f2f5; --text: #1c2330; --muted: #667085;
+  --border: #d9dde5; --accent: #2563eb; --accent-bg: #e8effd; --danger: #c0352b; --danger-bg: #fdeceb;
+  --warn: #9a6700; --warn-bg: #fff4d6; --ok: #1a7f37;
+  --c-root: #64748b; --c-group: #7c3aed; --c-subgroup: #2563eb; --c-dir: #0891b2;
+  --c-file: #16a34a; --c-hosts: #d97706; --c-host: #b45309; --c-error: #c0352b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --add-bg: #e6f6ea; --del-bg: #fdeceb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12151b; --surface: #1a1e26; --surface2: #222732; --text: #e6e9ef; --muted: #98a2b3;
+    --border: #323a48; --accent: #6b9bff; --accent-bg: #1f2c47; --danger: #ff7b72; --danger-bg: #3a2022;
+    --warn: #e3b341; --warn-bg: #3a3118; --ok: #56d364;
+    --c-root: #94a3b8; --c-group: #b794f6; --c-subgroup: #6b9bff; --c-dir: #38bdf8;
+    --c-file: #4ade80; --c-hosts: #fbbf24; --c-host: #f59e0b; --c-error: #ff7b72;
+    --add-bg: #17301f; --del-bg: #3a2022;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text);
+  display: flex; flex-direction: column; overflow: hidden; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.ghost { border-color: transparent; background: transparent; padding: 3px 7px; }
+button.ghost:hover:not(:disabled) { background: var(--surface2); border-color: transparent; }
+input[type=text], select, textarea { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+
+header { display: flex; align-items: center; gap: 14px; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+#cfg { color: var(--muted); font-size: 12px; }
+#searchbox { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 320px; }
+#q { flex: 1; min-width: 160px; max-width: 420px; }
+#searchbox label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; cursor: pointer; }
+#hdrbtns { display: flex; gap: 6px; }
+
+main { flex: 1; display: flex; min-height: 0; }
+#mapwrap { flex: 1; position: relative; min-width: 0; background:
+  radial-gradient(circle, var(--border) 1px, transparent 1px) 0 0 / 24px 24px, var(--bg); }
+#map { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+#map.panning { cursor: grabbing; }
+.edge { fill: none; stroke: var(--border); stroke-width: 1.5; }
+.edge.dim { opacity: .35; }
+.node { cursor: pointer; }
+.node rect.body { rx: 7; ry: 7; stroke-width: 1.5; fill: var(--surface); }
+.node text { font-size: 13px; fill: var(--text); dominant-baseline: central; pointer-events: none; }
+.node text.sub { fill: var(--muted); font-size: 11px; }
+.node.dim { opacity: .38; }
+.node.hit rect.body { stroke-width: 3; filter: drop-shadow(0 0 5px var(--accent)); }
+.node.sel rect.body { fill: var(--accent-bg); stroke-width: 2.5; }
+.k-root rect.body { stroke: var(--c-root); } .k-group rect.body { stroke: var(--c-group); }
+.k-subgroup rect.body { stroke: var(--c-subgroup); } .k-dir rect.body { stroke: var(--c-dir); }
+.k-file rect.body { stroke: var(--c-file); } .k-hosts rect.body { stroke: var(--c-hosts); }
+.k-host rect.body { stroke: var(--c-host); stroke-dasharray: 0; } .k-host text { font-size: 12px; }
+.k-file.err rect.body, .k-hosts.err rect.body { stroke: var(--c-error); stroke-dasharray: 4 3; }
+.k-root text, .k-group text, .k-subgroup text { font-weight: 600; }
+.tog rect { fill: var(--surface); stroke: var(--border); stroke-width: 1; rx: 9; ry: 9; }
+.tog text { font-size: 10px; fill: var(--muted); text-anchor: middle; }
+.tog:hover rect { stroke: var(--accent); }
+.badge circle { fill: var(--accent); } .badge text { fill: #fff; font-size: 10px; text-anchor: middle; font-weight: 600; }
+
+#mapctl { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 4px; }
+#mapctl button { width: 34px; height: 34px; padding: 0; font-size: 16px; }
+#legend { position: absolute; left: 12px; bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 88%, transparent); padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); }
+#legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; border: 2px solid; margin-right: 5px; vertical-align: -1px; }
+#stats { position: absolute; left: 12px; top: 10px; font-size: 12px; color: var(--muted); }
+
+#results { position: absolute; left: 12px; top: 34px; width: 380px; max-height: calc(100% - 100px); overflow: auto; display: none;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.18); }
+#results .rh { position: sticky; top: 0; background: var(--surface); padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); }
+#results .grp { padding: 6px 12px 2px; font-weight: 600; font-size: 12px; font-family: var(--mono); word-break: break-all; }
+#results .hit { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 4px 12px 4px 22px; font-size: 12.5px; }
+#results .hit:hover { background: var(--surface2); }
+#results .hit .p { font-family: var(--mono); }
+#results .hit .v { color: var(--muted); font-family: var(--mono); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#results .empty { padding: 14px; color: var(--muted); }
+mark { background: #ffe58a; color: #1c2330; border-radius: 2px; padding: 0 1px; }
+
+#panel { width: 540px; max-width: 60vw; background: var(--surface); border-left: 1px solid var(--border); display: none; flex-direction: column; min-height: 0; }
+#panel.open { display: flex; }
+.ph { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.ptitle { flex: 1; font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+.banners { display: flex; flex-direction: column; gap: 6px; padding: 0 12px; }
+.banner { margin-top: 8px; padding: 7px 10px; border-radius: 7px; font-size: 12.5px; background: var(--warn-bg); color: var(--warn); white-space: pre-wrap; }
+.banner.err { background: var(--danger-bg); color: var(--danger); }
+.banner button { margin-left: 8px; padding: 2px 8px; font-size: 12px; }
+.tabs { display: flex; gap: 2px; padding: 8px 12px 0; border-bottom: 1px solid var(--border); }
+.tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 6px 12px; color: var(--muted); }
+.tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.pbody { flex: 1; overflow: auto; padding: 8px 4px 12px; min-height: 0; }
+.pfoot { border-top: 1px solid var(--border); padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+.pfoot .info { flex: 1; color: var(--muted); font-size: 12.5px; }
+
+.krow { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 6px; min-height: 30px; }
+.krow:hover { background: var(--surface2); }
+.krow.focus { background: var(--accent-bg); outline: 1px solid var(--accent); }
+.krow .arrow { width: 18px; text-align: center; color: var(--muted); cursor: pointer; user-select: none; flex: none; }
+.krow .key { font-family: var(--mono); font-size: 12.5px; flex: none; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.krow .key.idx { color: var(--muted); }
+.krow .key.inh { font-style: italic; color: var(--muted); }
+.krow .meta { color: var(--muted); font-size: 12px; }
+.krow .sp { flex: 1; }
+.krow select { padding: 3px 4px; font-size: 12px; color: var(--muted); flex: none; }
+.krow input[type=text], .krow textarea { flex: 1; min-width: 60px; font-family: var(--mono); font-size: 12.5px; padding: 3px 7px; }
+.krow textarea { resize: vertical; min-height: 56px; }
+.krow input.bad { border-color: var(--danger); background: var(--danger-bg); }
+.krow .x { opacity: 0; color: var(--danger); } .krow:hover .x { opacity: 1; }
+.krow .add { color: var(--accent); font-size: 12px; }
+.addform { display: flex; gap: 6px; align-items: center; margin: 2px 8px 6px; padding: 8px; border: 1px dashed var(--border); border-radius: 8px; }
+.addform input[type=text] { flex: 1; min-width: 50px; font-family: var(--mono); font-size: 12.5px; }
+.empty { color: var(--muted); padding: 10px 14px; }
+
+textarea.src { width: calc(100% - 16px); margin: 0 8px; height: calc(100% - 4px); min-height: 300px; resize: none; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; tab-size: 2; white-space: pre; }
+.hist { padding: 4px 12px; } .hist .row { display: grid; grid-template-columns: 70px 120px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.hist .row b { font-family: var(--mono); font-weight: 500; color: var(--accent); }
+.hist .row span { color: var(--muted); }
+
+.diff { margin: 4px 12px; border: 1px solid var(--border); border-radius: 8px; overflow: auto; max-height: 52vh; font-family: var(--mono); font-size: 12px; }
+.diff div { padding: 0 10px; white-space: pre; min-height: 1.5em; line-height: 1.5; }
+.diff .add { background: var(--add-bg); } .diff .del { background: var(--del-bg); } .diff .hunk { color: var(--muted); background: var(--surface2); }
+.msgrow { padding: 10px 12px 0; display: flex; flex-direction: column; gap: 4px; }
+.msgrow label { font-size: 12px; color: var(--muted); } .msgrow input { width: 100%; }
+
+#toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: #1c2330; color: #fff; padding: 9px 16px; border-radius: 9px; font-size: 13px;
+  opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80vw; white-space: pre-wrap; z-index: 10; }
+#toast.show { opacity: 1; } #toast.bad { background: #b42318; }
+@media (max-width: 900px) { #panel { position: absolute; right: 0; top: 0; bottom: 0; width: 100%; max-width: 100%; z-index: 5; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>yamlmap</h1>
+  <span id="cfg"></span>
+  <div id="searchbox">
+    <input id="q" type="text" placeholder="Поиск по ключам, значениям, именам  ( / )" autocomplete="off" spellcheck="false">
+    <label><input type="checkbox" id="o-keys" checked> ключи</label>
+    <label><input type="checkbox" id="o-values" checked> значения</label>
+    <label><input type="checkbox" id="o-names" checked> имена</label>
+    <label title="Регулярное выражение"><input type="checkbox" id="o-regex"> .*</label>
+    <label title="Учитывать регистр"><input type="checkbox" id="o-case"> Aa</label>
+  </div>
+  <div id="hdrbtns">
+    <button id="b-expand" title="Развернуть все узлы">Развернуть</button>
+    <button id="b-collapse" title="Свернуть до групп">Свернуть</button>
+    <button id="b-reload" title="Перечитать каталог с диска">Обновить</button>
+  </div>
+</header>
+<main>
+  <section id="mapwrap">
+    <svg id="map" xmlns="http://www.w3.org/2000/svg"><g id="vp"></g></svg>
+    <div id="stats"></div>
+    <div id="results"></div>
+    <div id="legend">
+      <span><i style="color:var(--c-group)"></i>группа</span><span><i style="color:var(--c-subgroup)"></i>подгруппа</span>
+      <span><i style="color:var(--c-dir)"></i>каталог</span><span><i style="color:var(--c-file)"></i>YAML</span>
+      <span><i style="color:var(--c-hosts)"></i>хосты</span><span><i style="color:var(--c-error)"></i>ошибка</span>
+    </div>
+    <div id="mapctl">
+      <button id="z-in" title="Приблизить">+</button><button id="z-out" title="Отдалить">−</button><button id="z-fit" title="Вписать в окно">⤢</button>
+    </div>
+  </section>
+  <aside id="panel"></aside>
+</main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ helpers */
+const $ = (s, r = document) => r.querySelector(s);
+const SVGNS = "http://www.w3.org/2000/svg";
+
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "value") el.value = v;
+    else if (v === true) el.setAttribute(k, "");
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  }
+  return el;
+}
+function s(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) el.setAttribute(k, v);
+  for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return el;
+}
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  let data = null;
+  try { data = await r.json(); } catch (e) { /* no body */ }
+  if (!r.ok) {
+    let msg = data && data.detail ? data.detail : r.statusText;
+    if (typeof msg !== "string") msg = JSON.stringify(msg);
+    const err = new Error(msg); err.status = r.status; throw err;
+  }
+  return data;
+}
+const post = (url, body) => api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+let toastTimer;
+function toast(msg, bad) {
+  const t = $("#toast");
+  t.textContent = msg; t.className = "show" + (bad ? " bad" : "");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = ""; }, bad ? 6000 : 3200);
+}
+
+function markText(text, query, opts) {
+  if (!query) return text;
+  let re;
+  try { re = opts.regex ? new RegExp(query, opts.case ? "g" : "gi")
+                        : new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), opts.case ? "g" : "gi"); }
+  catch (e) { return text; }
+  const frag = document.createDocumentFragment();
+  let last = 0, m, guard = 0;
+  while ((m = re.exec(text)) && guard++ < 50) {
+    if (m[0] === "") { re.lastIndex++; continue; }
+    frag.append(text.slice(last, m.index));
+    frag.append(h("mark", null, m[0]));
+    last = m.index + m[0].length;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+
+/* ------------------------------------------------------------------ state */
+const S = {
+  cfg: null, nodes: [], byId: new Map(), kids: new Map(), collapsed: new Set(),
+  hits: new Map(), searching: false, selected: null,
+  view: { x: 40, y: 40, k: 1 }, file: null, firstLoad: true,
+};
+
+/* ------------------------------------------------------------------ tree + map */
+const NODE_H = 28, GAP_Y = 8, GAP_X = 58, TOG_W = 30;
+const measureCtx = document.createElement("canvas").getContext("2d");
+
+function nodeText(n) {
+  let t = n.label;
+  if ((n.kind === "file" || n.kind === "hosts") && n.error) t = "⚠ " + t;
+  return t;
+}
+function nodeSub(n) {
+  if (n.kind === "hosts") return String(n.count);
+  if (n.kind === "file" && !n.error) return n.keys + " ключей";
+  return "";
+}
+function textWidth(str, size, weight) {
+  measureCtx.font = (weight || 400) + " " + size + "px system-ui, sans-serif";
+  return measureCtx.measureText(str).width;
+}
+
+async function loadTree() {
+  const data = await api("/api/tree");
+  S.nodes = data.nodes; S.skipped = data.skipped_groups; S.stats = data.stats;
+  S.byId = new Map(S.nodes.map((n) => [n.id, n]));
+  S.kids = new Map();
+  for (const n of S.nodes) {
+    if (n.parent === null) continue;
+    if (!S.kids.has(n.parent)) S.kids.set(n.parent, []);
+    S.kids.get(n.parent).push(n);
+  }
+  const depth = (n) => { let d = 0; while (n.parent !== null) { n = S.byId.get(n.parent); d++; } return d; };
+  for (const n of S.nodes) n.depth = depth(n);
+  if (S.firstLoad) {
+    const small = S.nodes.length <= 80;
+    for (const n of S.nodes) {
+      if (!S.kids.has(n.id)) continue;
+      if (n.kind === "hosts" || (!small && n.depth >= 3)) S.collapsed.add(n.id);
+    }
+    S.firstLoad = false;
+  } else {
+    for (const id of [...S.collapsed]) if (!S.byId.has(id)) S.collapsed.delete(id);
+  }
+  const st = S.stats;
+  $("#stats").textContent = st.groups + " групп · " + st.files + " YAML · " + st.hosts + " хостов" +
+    (st.errors ? " · ошибок: " + st.errors : "") +
+    (S.skipped.length ? " · без подгруппы '" + S.cfg.subgroup + "': " + S.skipped.join(", ") : "");
+  renderMap();
+}
+
+function descendants(id) {
+  let c = 0; const stack = [...(S.kids.get(id) || [])];
+  while (stack.length) { const n = stack.pop(); c++; for (const k of S.kids.get(n.id) || []) stack.push(k); }
+  return c;
+}
+
+function layout() {
+  const visible = [];
+  let row = 0;
+  const place = (n, depth) => {
+    n.vd = depth; visible.push(n);
+    const kids = S.collapsed.has(n.id) ? [] : (S.kids.get(n.id) || []);
+    if (!kids.length) { n.y = row * (NODE_H + GAP_Y); row++; }
+    else { for (const k of kids) place(k, depth + 1); n.y = (kids[0].y + kids[kids.length - 1].y) / 2; }
+  };
+  place(S.byId.get(""), 0);
+  const maxW = [];
+  for (const n of visible) {
+    const bold = ["root", "group", "subgroup"].includes(n.kind) ? 600 : 400;
+    let w = textWidth(nodeText(n), n.kind === "host" ? 12 : 13, bold) + 20;
+    const sub = nodeSub(n);
+    if (sub) w += textWidth(sub, 11) + 8;
+    n.w = Math.ceil(w);
+    maxW[n.vd] = Math.max(maxW[n.vd] || 0, n.w);
+  }
+  const xs = [0];
+  for (let d = 1; d < maxW.length; d++) xs[d] = xs[d - 1] + maxW[d - 1] + GAP_X;
+  for (const n of visible) n.x = xs[n.vd];
+  return visible;
+}
+
+function renderMap() {
+  const vp = $("#vp");
+  vp.replaceChildren();
+  const visible = layout();
+  const edges = s("g"), nodes = s("g");
+  vp.append(edges, nodes);
+  const hitAnc = S.searching ? hitAncestors() : null;
+
+  for (const n of visible) {
+    if (n.parent === null) continue;
+    const p = S.byId.get(n.parent);
+    const x1 = p.x + p.w + (S.kids.has(p.id) ? TOG_W - 4 : 0), y1 = p.y, x2 = n.x, y2 = n.y, mx = (x1 + x2) / 2;
+    const dim = hitAnc && !hitAnc.has(n.id);
+    edges.append(s("path", { class: "edge" + (dim ? " dim" : ""), d: `M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}` }));
+  }
+  for (const n of visible) {
+    const cls = ["node", "k-" + n.kind];
+    if (n.error) cls.push("err");
+    if (S.hits.has(n.id)) cls.push("hit");
+    else if (hitAnc && !hitAnc.has(n.id)) cls.push("dim");
+    if (S.file && S.file.id === n.id) cls.push("sel");
+    const g = s("g", { class: cls.join(" "), "data-id": n.id, transform: `translate(${n.x} ${n.y - NODE_H / 2})` });
+    const title = s("title", null, n.error ? n.error : n.id || n.label);
+    g.append(title, s("rect", { class: "body", width: n.w, height: NODE_H }));
+    const bold = ["root", "group", "subgroup"].includes(n.kind);
+    g.append(s("text", { x: 10, y: NODE_H / 2, style: bold ? "font-weight:600" : "" }, nodeText(n)));
+    const sub = nodeSub(n);
+    if (sub) g.append(s("text", { class: "sub", x: 10 + textWidth(nodeText(n), 13, bold ? 600 : 400) + 6, y: NODE_H / 2 + 1 }, sub));
+    const cnt = S.hits.get(n.id);
+    if (cnt) {
+      const bw = Math.max(18, String(cnt).length * 7 + 8);
+      g.append(s("g", { class: "badge", transform: `translate(${n.w - 4} -3)` },
+        s("circle", { r: bw / 2, cx: 0, cy: 0 }), s("text", { x: 0, y: 0.5, "dominant-baseline": "central" }, cnt > 99 ? "99+" : cnt)));
+    }
+    if (S.kids.has(n.id)) {
+      const closed = S.collapsed.has(n.id);
+      const tg = s("g", { class: "tog", "data-toggle": n.id, transform: `translate(${n.w + 4} ${NODE_H / 2 - 9})` },
+        s("rect", { width: TOG_W - 6, height: 18 }),
+        s("text", { x: (TOG_W - 6) / 2, y: 9, "dominant-baseline": "central" }, closed ? "+" + descendants(n.id) : "−"));
+      g.append(tg);
+    }
+    nodes.append(g);
+  }
+  applyView();
+}
+
+function hitAncestors() {
+  const set = new Set();
+  for (const id of S.hits.keys()) {
+    let n = S.byId.get(id);
+    while (n) { set.add(n.id); n = n.parent === null ? null : S.byId.get(n.parent); }
+  }
+  return set;
+}
+
+function applyView() {
+  const v = S.view;
+  $("#vp").setAttribute("transform", `translate(${v.x} ${v.y}) scale(${v.k})`);
+}
+
+function visibleBounds() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of S.nodes) {
+    if (n.vd === undefined || !isVisible(n)) continue;
+    minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x + n.w + TOG_W);
+    minY = Math.min(minY, n.y - NODE_H / 2); maxY = Math.max(maxY, n.y + NODE_H / 2);
+  }
+  return { minX, minY, maxX, maxY };
+}
+function isVisible(n) {
+  while (n.parent !== null) { n = S.byId.get(n.parent); if (S.collapsed.has(n.id)) return false; }
+  return true;
+}
+
+function fitView() {
+  const b = visibleBounds(), svg = $("#map").getBoundingClientRect();
+  if (!isFinite(b.minX)) return;
+  const w = b.maxX - b.minX, hgt = b.maxY - b.minY, pad = 50;
+  const k = Math.min(1, (svg.width - 2 * pad) / w, (svg.height - 2 * pad - 30) / hgt);
+  S.view.k = Math.max(0.2, k);
+  S.view.x = pad - b.minX * S.view.k;
+  S.view.y = Math.max(pad, (svg.height - hgt * S.view.k) / 2) - b.minY * S.view.k;
+  applyView();
+}
+
+function zoomAt(factor, cx, cy) {
+  const v = S.view, k = Math.min(2.5, Math.max(0.2, v.k * factor)), f = k / v.k;
+  v.x = cx - (cx - v.x) * f; v.y = cy - (cy - v.y) * f; v.k = k; applyView();
+}
+
+function expandAncestors(id) {
+  let n = S.byId.get(id);
+  while (n && n.parent !== null) { n = S.byId.get(n.parent); S.collapsed.delete(n.id); }
+}
+
+function focusNode(id) {
+  const n = S.byId.get(id); if (!n) return;
+  expandAncestors(id);
+  renderMap();
+  const svg = $("#map").getBoundingClientRect();
+  S.view.x = svg.width / 2 - (n.x + n.w / 2) * S.view.k;
+  S.view.y = svg.height / 2 - n.y * S.view.k;
+  applyView();
+}
+
+/* pan / zoom / click */
+(function bindMap() {
+  const svg = $("#map");
+  let drag = null;
+  svg.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    drag = { x: e.clientX, y: e.clientY, vx: S.view.x, vy: S.view.y, moved: false, target: e.target };
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) { drag.moved = true; svg.classList.add("panning"); }
+    if (drag.moved) { S.view.x = drag.vx + dx; S.view.y = drag.vy + dy; applyView(); }
+  });
+  svg.addEventListener("pointerup", (e) => {
+    // with pointer capture e.target is always the svg, so use the element pressed on pointerdown
+    const moved = drag && drag.moved, target = drag && drag.target;
+    svg.classList.remove("panning");
+    try { svg.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+    drag = null;
+    if (moved || !target || !target.closest) return;
+    const tog = target.closest("[data-toggle]");
+    if (tog) { toggleNode(tog.dataset.toggle); return; }
+    const g = target.closest("[data-id]");
+    if (g) clickNode(g.dataset.id);
+  });
+  svg.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = svg.getBoundingClientRect();
+    zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  $("#z-in").onclick = () => { const r = svg.getBoundingClientRect(); zoomAt(1.25, r.width / 2, r.height / 2); };
+  $("#z-out").onclick = () => { const r = svg.getBoundingClientRect(); zoomAt(0.8, r.width / 2, r.height / 2); };
+  $("#z-fit").onclick = fitView;
+})();
+
+function toggleNode(id) {
+  if (S.collapsed.has(id)) S.collapsed.delete(id); else S.collapsed.add(id);
+  renderMap();
+}
+
+function clickNode(id) {
+  const n = S.byId.get(id);
+  if (n.kind === "file" || n.kind === "hosts") openFile(id);
+  else if (n.kind === "host") openFile(n.parent, { host: n.label });
+  else toggleNode(id);
+}
+
+$("#b-expand").onclick = () => { S.collapsed.clear(); renderMap(); fitView(); };
+$("#b-collapse").onclick = () => {
+  S.collapsed.clear();
+  for (const n of S.nodes) if (S.kids.has(n.id) && n.depth >= 2) S.collapsed.add(n.id);
+  renderMap(); fitView();
+};
+$("#b-reload").onclick = async () => { await loadTree(); if (S.searching) runSearch(); toast("Каталог перечитан"); };
+
+/* ------------------------------------------------------------------ search */
+let searchTimer;
+function searchOpts() {
+  return { keys: $("#o-keys").checked, values: $("#o-values").checked, names: $("#o-names").checked,
+           regex: $("#o-regex").checked, case: $("#o-case").checked };
+}
+for (const id of ["q", "o-keys", "o-values", "o-names", "o-regex", "o-case"]) {
+  $("#" + id).addEventListener(id === "q" ? "input" : "change", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220); });
+}
+
+function clearSearch() {
+  $("#q").value = ""; S.hits = new Map(); S.searching = false;
+  $("#results").style.display = "none"; renderMap();
+}
+
+async function runSearch() {
+  const q = $("#q").value.trim();
+  if (!q) { clearSearch(); return; }
+  const o = searchOpts();
+  const box = $("#results");
+  try {
+    const params = new URLSearchParams({ q, keys: o.keys, values: o.values, names: o.names, regex: o.regex, case: o.case });
+    const data = await api("/api/search?" + params);
+    S.searching = true; S.hits = new Map();
+    for (const hit of data.hits) S.hits.set(hit.node, (S.hits.get(hit.node) || 0) + 1);
+    for (const id of S.hits.keys()) expandAncestors(id);
+    renderMap();
+    renderResults(data, q, o);
+  } catch (e) {
+    box.style.display = "block";
+    box.replaceChildren(h("div", { class: "empty" }, e.message));
+  }
+}
+
+function renderResults(data, q, o) {
+  const box = $("#results");
+  box.style.display = "block";
+  box.replaceChildren(h("div", { class: "rh" },
+    h("span", null, data.hits.length ? data.hits.length + (data.truncated ? "+" : "") + " совпадений" : "Ничего не найдено"),
+    h("button", { class: "ghost", onclick: clearSearch }, "✕")));
+  const groups = new Map();
+  for (const hit of data.hits) {
+    const key = hit.kind === "host" ? hit.node.split("#")[0] : hit.node;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(hit);
+  }
+  for (const [node, hits] of groups) {
+    box.append(h("div", { class: "grp" }, node));
+    for (const hit of hits) {
+      let body;
+      if (hit.where === "name") body = [h("span", { class: "p" }, markText(hit.kind === "host" ? "хост " + hit.label : hit.label + " (" + hit.kind + ")", q, o))];
+      else body = [h("span", { class: "p" }, markText(hit.path_text, hit.where === "key" ? q : "", o)),
+                   hit.value != null ? h("span", { class: "v" }, markText(hit.value, hit.where === "value" ? q : "", o)) : null];
+      box.append(h("button", { class: "hit", onclick: () => openHit(hit) }, body));
+    }
+  }
+}
+
+function openHit(hit) {
+  if (hit.kind === "file") { focusNode(hit.node); openFile(hit.node, { path: hit.path }); }
+  else if (hit.kind === "host") { focusNode(hit.node); openFile(hit.node.split("#")[0], { host: hit.label }); }
+  else if (hit.kind === "hosts") { focusNode(hit.node); openFile(hit.node); }
+  else focusNode(hit.node);
+}
+
+document.addEventListener("keydown", (e) => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (e.key === "/" && !typing) { e.preventDefault(); $("#q").focus(); $("#q").select(); }
+  else if (e.key === "Escape") {
+    if (S.file && S.file.diff) { S.file.diff = null; renderPanel(); }
+    else if (S.searching) clearSearch();
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && S.file) { e.preventDefault(); if (isDirty()) showDiff(); }
+});
+
+/* ------------------------------------------------------------------ editor panel */
+const pathKey = (p) => JSON.stringify(p);
+const samePath = (a, b) => a && b && pathKey(a) === pathKey(b);
+
+function isDirty() {
+  const f = S.file;
+  return !!f && (f.ops.length > 0 || (f.editMode === "text" && f.cur !== f.orig));
+}
+
+async function confirmLeave() {
+  if (!isDirty()) return true;
+  return window.confirm("Есть несохранённые изменения в " + S.file.id + ". Отбросить их?");
+}
+
+async function openFile(id, focus) {
+  if (S.file && S.file.id === id && isDirty()) { if (focus) applyFocus(focus); return; }
+  if (!(await confirmLeave())) return;
+  let f;
+  try { f = await api("/api/file?path=" + encodeURIComponent(id)); }
+  catch (e) { toast(e.message, true); return; }
+  S.file = {
+    id, kind: f.kind, hash: f.hash, orig: f.text, cur: f.text, model: f.model, origModel: f.model ? clone(f.model) : null,
+    ops: [], editMode: "ops", gitDirty: f.git_dirty, lossy: f.lossy, error: f.error, multi: f.multi_doc,
+    open: new Set(), adding: null, diff: null, history: null, conflict: false,
+    tab: f.kind === "hosts" || f.error || f.multi_doc ? "text" : "keys", focusPath: null, focusHost: null,
+  };
+  if (f.model) for (const item of f.model.items || []) S.file.open.add(pathKey([item.key]));
+  applyFocusState(focus);
+  renderPanel();
+  renderMap();
+}
+
+function applyFocusState(focus) {
+  const f = S.file;
+  f.focusPath = focus && focus.path ? focus.path : null;
+  f.focusHost = focus && focus.host ? focus.host : null;
+  if (f.focusPath) { f.tab = "keys"; for (let i = 1; i < f.focusPath.length; i++) f.open.add(pathKey(f.focusPath.slice(0, i))); }
+  if (f.focusHost) f.tab = "text";
+  if (f.tab === "keys" && !f.model) f.tab = "text";
+}
+function applyFocus(focus) { applyFocusState(focus); renderPanel(); }
+
+function closePanel() {
+  if (isDirty() && !window.confirm("Есть несохранённые изменения. Закрыть без сохранения?")) return;
+  S.file = null; $("#panel").classList.remove("open"); renderMap();
+}
+
+function renderPanel() {
+  const f = S.file, panel = $("#panel");
+  if (!f) { panel.classList.remove("open"); panel.replaceChildren(); return; }
+  panel.classList.add("open");
+  const banners = h("div", { class: "banners" });
+  if (f.gitDirty) banners.append(h("div", { class: "banner" }, "В файле уже есть незакоммиченные изменения: они попадут в коммит вместе с вашими."));
+  if (f.lossy && f.kind === "yaml") banners.append(h("div", { class: "banner" }, "Нестандартное форматирование: при правке через «Ключи» файл может быть слегка переформатирован. Проверьте diff перед сохранением."));
+  if (f.multi) banners.append(h("div", { class: "banner" }, "В файле несколько YAML-документов: доступна только правка текста."));
+  if (f.error) banners.append(h("div", { class: "banner err" }, "Файл не разбирается как YAML:\n" + f.error));
+  if (f.conflict) banners.append(h("div", { class: "banner err" }, "Файл изменился на диске после открытия.",
+    h("button", { onclick: () => { f.ops = []; f.cur = f.orig; f.editMode = "ops"; reopen(); } }, "Перечитать (правки будут потеряны)")));
+
+  const tabs = h("div", { class: "tabs" });
+  const tabDefs = f.kind === "yaml" ? [["keys", "Ключи"], ["text", "Текст"], ["history", "История"]] : [["text", "Текст"], ["history", "История"]];
+  for (const [id, label] of tabDefs) {
+    const disabled = id === "keys" && (!f.model || f.error || f.multi);
+    tabs.append(h("button", { class: "tab" + (f.tab === id ? " on" : ""), disabled, onclick: () => switchTab(id) }, label));
+  }
+
+  let body, foot;
+  if (f.diff) { ({ body, foot } = renderDiff()); }
+  else {
+    body = f.tab === "keys" ? renderKeys() : f.tab === "text" ? renderText() : renderHistory();
+    foot = renderFoot();
+  }
+  panel.replaceChildren(...[
+    h("div", { class: "ph" }, h("div", { class: "ptitle" }, f.id), h("button", { class: "ghost", title: "Закрыть", onclick: closePanel }, "✕")),
+    banners, f.diff ? null : tabs, body, foot].filter(Boolean));
+
+  if (f.tab === "keys" && f.focusPath && !f.diff) {
+    const el = $(".krow.focus"); if (el) el.scrollIntoView({ block: "center" });
+  }
+  if (f.tab === "text" && f.focusHost && !f.diff) selectHostLine(f.focusHost);
+}
+
+async function reopen() {
+  const id = S.file.id; S.file = null;
+  await openFile(id);
+}
+
+function selectHostLine(host) {
+  const ta = $("textarea.src"); if (!ta) return;
+  const lines = ta.value.split("\n"); let pos = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const first = lines[i].split("#")[0].trim().split(/\s+/)[0];
+    if (first === host) {
+      ta.focus(); ta.setSelectionRange(pos, pos + lines[i].length);
+      ta.scrollTop = Math.max(0, i * 18 - ta.clientHeight / 2);
+      return;
+    }
+    pos += lines[i].length + 1;
+  }
+}
+
+async function switchTab(tab) {
+  const f = S.file;
+  if (tab === f.tab) return;
+  if (tab === "keys" && f.editMode === "text" && f.cur !== f.orig) {
+    if (!window.confirm("Правки текста будут сброшены при переходе к редактору ключей. Продолжить?")) return;
+    f.cur = f.orig; f.editMode = "ops"; f.model = clone(f.origModel); f.ops = [];
+  }
+  if (tab === "text" && f.ops.length) {
+    try {
+      const r = await post("/api/file/preview", { path: f.id, base_hash: f.hash, ops: f.ops });
+      f.cur = r.new_text; f.editMode = "text"; f.ops = [];
+    } catch (e) { toast(e.message, true); return; }
+  }
+  f.tab = tab; f.adding = null;
+  if (tab === "history" && !f.history) {
+    f.history = [];
+    try { f.history = (await api("/api/history?path=" + encodeURIComponent(f.id))).commits; } catch (e) { toast(e.message, true); }
+  }
+  renderPanel();
+}
+
+/* ---- keys tab */
+const TYPES = ["str", "int", "float", "bool", "null", "map", "seq"];
+const TYPE_LABEL = { str: "str", int: "int", float: "float", bool: "bool", null: "null", map: "map", seq: "list" };
+
+function navModel(model, path) {
+  let cur = model;
+  for (const p of path) {
+    if (cur.type === "map") { const it = cur.items.find((i) => i.key === p); if (!it) throw new Error("path"); cur = it.node; }
+    else cur = cur.items[p];
+  }
+  return cur;
+}
+function specToNode(spec) {
+  if (spec.type === "map" || spec.type === "seq") return { type: spec.type, items: [] };
+  if (spec.type === "null") return { type: "null" };
+  return { type: spec.type, value: spec.value };
+}
+function commitOp(op) {
+  const f = S.file;
+  const model = f.model;
+  if (op.op === "set") {
+    const parent = navModel(model, op.path.slice(0, -1)), k = op.path[op.path.length - 1];
+    const node = specToNode(op.value);
+    if (parent.type === "map") { const it = parent.items.find((i) => i.key === k); it.node = node; delete it.inherited; } else parent.items[k] = node;
+  } else if (op.op === "delete") {
+    const parent = navModel(model, op.path.slice(0, -1)), k = op.path[op.path.length - 1];
+    if (parent.type === "map") parent.items.splice(parent.items.findIndex((i) => i.key === k), 1); else parent.items.splice(k, 1);
+  } else if (op.op === "add") {
+    const c = navModel(model, op.path), node = specToNode(op.value);
+    if (c.type === "map") c.items.push({ key: op.key, node }); else c.items.push(node);
+  }
+  f.ops.push(op); f.editMode = "ops"; f.adding = null;
+  renderPanel();
+}
+
+function defaultSpec(type, prev) {
+  if (type === "str") return { type, value: prev && prev.value != null && prev.type !== "bool" ? String(prev.value) : "" };
+  if (type === "int" || type === "float") {
+    const n = prev && prev.value != null ? Number(prev.value) : 0;
+    return { type, value: Number.isFinite(n) ? String(type === "int" ? Math.trunc(n) : n) : "0" };
+  }
+  if (type === "bool") return { type, value: true };
+  return { type };
+}
+const INT_RE = /^[-+]?(\d+|0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+)$/;
+function validScalar(type, text) {
+  if (type === "int") return INT_RE.test(text.trim());
+  if (type === "float") return text.trim() !== "" && Number.isFinite(Number(text));
+  return true;
+}
+
+function renderKeys() {
+  const f = S.file;
+  const wrap = h("div");
+  const root = f.model;
+  if (root.type === "map" || root.type === "seq") {
+    wrap.append(h("div", { class: "krow" }, h("span", { class: "meta" }, root.type === "map" ? "корень: " + root.items.length + " ключей" : "корень: список, " + root.items.length),
+      h("span", { class: "sp" }), addButton([], root)));
+    if (f.adding === pathKey([])) wrap.append(addForm([], root));
+    wrap.append(...children([], root, 0));
+  } else wrap.append(h("div", { class: "empty" }, "Корень документа - скаляр, правьте через вкладку «Текст»."));
+  if (!root.items || !root.items.length) wrap.append(h("div", { class: "empty" }, "Документ пуст."));
+  return h("div", { class: "pbody" }, wrap);
+}
+
+function children(path, node, depth) {
+  const out = [];
+  const entries = node.type === "map" ? node.items.map((i) => [i.key, i.node, !!i.inherited]) : node.items.map((n, i) => [i, n, false]);
+  for (const [key, child, inherited] of entries) out.push(...row(path.concat([key]), key, child, depth, node.type === "seq", inherited));
+  return out;
+}
+
+function addButton(path, node) {
+  return h("button", { class: "ghost add", onclick: () => { S.file.adding = pathKey(path); renderPanel(); } }, node.type === "map" ? "+ ключ" : "+ элемент");
+}
+
+function row(path, key, node, depth, inSeq, inherited) {
+  const f = S.file, pk = pathKey(path), isContainer = node.type === "map" || node.type === "seq";
+  const open = f.open.has(pk);
+  const out = [];
+  const focus = samePath(path, f.focusPath);
+  const r = h("div", { class: "krow" + (focus ? " focus" : ""), style: "padding-left:" + (8 + depth * 16) + "px" });
+  r.append(isContainer
+    ? h("span", { class: "arrow", onclick: () => { if (open) f.open.delete(pk); else f.open.add(pk); renderPanel(); } }, open ? "▾" : "▸")
+    : h("span", { class: "arrow" }));
+  r.append(h("span", { class: "key" + (inSeq ? " idx" : "") + (inherited ? " inh" : ""),
+    title: inherited ? "Унаследовано через << (якорь). Правка создаст локальное значение, удаление недоступно." : String(key) },
+    inSeq ? "[" + key + "]" : String(key)));
+
+  if (node.type === "other") r.append(h("input", { type: "text", value: node.value, readonly: true, title: "Значение этого типа правится через вкладку «Текст»" }));
+  else {
+    r.append(typeSelect(path, node));
+    if (isContainer) r.append(h("span", { class: "meta" }, node.type === "map" ? node.items.length + " ключей" : node.items.length + " эл."), h("span", { class: "sp" }), addButton(path, node));
+    else r.append(scalarInput(path, node));
+  }
+  if (inherited) r.append(h("span", { class: "meta", title: "Значение пришло из якоря через <<" }, "‹‹"));
+  else r.append(h("button", { class: "ghost x", title: "Удалить", onclick: () => commitOp({ op: "delete", path }) }, "✕"));
+  out.push(r);
+  if (isContainer && f.adding === pk) out.push(addForm(path, node, depth + 1));
+  if (isContainer && open) out.push(...children(path, node, depth + 1));
+  return out;
+}
+
+function typeSelect(path, node) {
+  const sel = h("select", { title: "Тип значения", onchange: () => commitOp({ op: "set", path, value: defaultSpec(sel.value, node) }) },
+    TYPES.map((t) => h("option", { value: t, selected: t === node.type }, TYPE_LABEL[t])));
+  return sel;
+}
+
+function scalarInput(path, node) {
+  if (node.type === "null") return h("span", { class: "sp meta" }, "null");
+  if (node.type === "bool") {
+    const sel = h("select", { onchange: () => commitOp({ op: "set", path, value: { type: "bool", value: sel.value === "true" } }) },
+      h("option", { value: "true", selected: node.value === true }, "true"), h("option", { value: "false", selected: node.value === false }, "false"));
+    sel.style.flex = "1"; sel.style.color = "inherit";
+    return sel;
+  }
+  const multi = node.type === "str" && (node.value.includes("\n") || node.value.length > 90);
+  const el = multi ? h("textarea", { rows: Math.min(8, node.value.split("\n").length + 1) }, node.value) : h("input", { type: "text", value: node.value });
+  if (multi) el.value = node.value;
+  const commit = () => {
+    if (!validScalar(node.type, el.value)) { el.classList.add("bad"); toast("Некорректное значение для типа " + TYPE_LABEL[node.type], true); return; }
+    el.classList.remove("bad");
+    if (el.value !== node.value) commitOp({ op: "set", path, value: { type: node.type, value: el.value } });
+  };
+  el.addEventListener("change", commit);
+  if (!multi) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } });
+  return el;
+}
+
+function addForm(path, node, depth) {
+  const f = S.file;
+  const isMap = node.type === "map";
+  const key = h("input", { type: "text", placeholder: "имя ключа" });
+  const type = h("select", null, TYPES.map((t) => h("option", { value: t }, TYPE_LABEL[t])));
+  const val = h("input", { type: "text", placeholder: "значение" });
+  const syncVal = () => { val.style.display = ["null", "map", "seq"].includes(type.value) ? "none" : ""; };
+  type.addEventListener("change", syncVal); syncVal();
+  const submit = () => {
+    const t = type.value;
+    let spec;
+    if (t === "bool") spec = { type: t, value: ["true", "yes", "1", ""].includes(val.value.trim().toLowerCase()) };
+    else if (t === "str" || t === "int" || t === "float") spec = { type: t, value: val.value };
+    else spec = { type: t };
+    if (isMap && !key.value.trim()) { toast("Укажите имя ключа", true); key.focus(); return; }
+    if (isMap && navModel(f.model, path).items.some((i) => i.key === key.value.trim())) { toast("Такой ключ уже есть", true); return; }
+    if ((t === "int" || t === "float") && !validScalar(t, val.value)) { toast("Некорректное число", true); return; }
+    commitOp(isMap ? { op: "add", path, key: key.value.trim(), value: spec } : { op: "add", path, value: spec });
+  };
+  for (const el of [key, val]) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } });
+  const form = h("div", { class: "addform", style: "margin-left:" + (8 + (depth || 0) * 16) + "px" },
+    isMap ? key : null, type, val,
+    h("button", { class: "primary", onclick: submit }, "Добавить"),
+    h("button", { class: "ghost", onclick: () => { f.adding = null; renderPanel(); } }, "✕"));
+  setTimeout(() => (isMap ? key : val).focus(), 0);
+  return form;
+}
+
+/* ---- text + history tabs */
+function renderText() {
+  const f = S.file;
+  const ta = h("textarea", { class: "src", spellcheck: "false", wrap: "off" });
+  ta.value = f.cur;
+  ta.addEventListener("input", () => { f.cur = ta.value; f.editMode = "text"; updateFoot(); });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const a = ta.selectionStart, b = ta.selectionEnd;
+      ta.value = ta.value.slice(0, a) + "  " + ta.value.slice(b);
+      ta.selectionStart = ta.selectionEnd = a + 2;
+      ta.dispatchEvent(new Event("input"));
+    }
+  });
+  return h("div", { class: "pbody", style: "padding:8px 0 0" }, ta);
+}
+
+function renderHistory() {
+  const f = S.file;
+  if (!f.history || !f.history.length) return h("div", { class: "pbody" }, h("div", { class: "empty" }, S.cfg.git ? "Коммитов с этим файлом пока нет." : "Каталог не в git-репозитории."));
+  return h("div", { class: "pbody" }, h("div", { class: "hist" }, f.history.map((c) =>
+    h("div", { class: "row" }, h("b", null, c.hash), h("span", null, c.date + " · " + c.author), h("div", null, c.subject)))));
+}
+
+/* ---- footer + diff */
+function renderFoot() {
+  const f = S.file;
+  const foot = h("div", { class: "pfoot" });
+  const info = h("div", { class: "info", id: "dirtyinfo" });
+  foot.append(info,
+    h("button", { id: "b-reset", onclick: resetEdits }, "Сбросить"),
+    h("button", { id: "b-diff", class: "primary", onclick: showDiff }, "Показать diff"));
+  setTimeout(updateFoot, 0);
+  return f.tab === "history" ? null : foot;
+}
+function updateFoot() {
+  const f = S.file; if (!f) return;
+  const info = $("#dirtyinfo"); if (!info) return;
+  const dirty = isDirty();
+  info.textContent = !dirty ? "Нет изменений" : f.editMode === "text" ? "Текст изменён" : "Изменений: " + f.ops.length;
+  $("#b-reset").disabled = !dirty; $("#b-diff").disabled = !dirty;
+}
+function resetEdits() {
+  const f = S.file;
+  f.ops = []; f.cur = f.orig; f.editMode = "ops"; f.model = f.origModel ? clone(f.origModel) : null; f.adding = null;
+  renderPanel();
+}
+
+function editBody() {
+  const f = S.file, b = { path: f.id, base_hash: f.hash };
+  if (f.editMode === "text") b.text = f.cur; else b.ops = f.ops;
+  return b;
+}
+
+async function showDiff() {
+  const f = S.file;
+  try {
+    const r = await post("/api/file/preview", editBody());
+    if (!r.changed) { toast("Итоговый файл не отличается от исходного"); return; }
+    f.diff = r; f.conflict = false; renderPanel();
+  } catch (e) {
+    if (e.status === 409) { f.conflict = true; renderPanel(); } else toast(e.message, true);
+  }
+}
+
+function renderDiff() {
+  const f = S.file;
+  const box = h("div", { class: "diff" });
+  for (const line of f.diff.diff.split("\n")) {
+    if (line === "") continue;
+    const cls = line.startsWith("@@") ? "hunk" : line.startsWith("+++") || line.startsWith("---") ? "hunk"
+              : line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : "";
+    box.append(h("div", { class: cls }, line));
+  }
+  const commit = S.cfg.git_commit;
+  const msg = h("input", { type: "text", value: "yamlmap: update " + f.id });
+  const msgRow = commit ? h("div", { class: "msgrow" }, h("label", null, "Сообщение коммита"), msg) : null;
+  const save = h("button", { class: "primary", onclick: () => saveNow(msg.value, save) }, commit ? "Сохранить и закоммитить" : "Сохранить");
+  const body = h("div", { class: "pbody" }, h("div", { class: "meta", style: "padding:6px 14px;color:var(--muted)" }, "Проверьте изменения перед записью в файл"), box, msgRow);
+  const foot = h("div", { class: "pfoot" }, h("div", { class: "info" }),
+    h("button", { onclick: () => { f.diff = null; renderPanel(); } }, "← Назад к правке"), save);
+  return { body, foot };
+}
+
+async function saveNow(message, btn) {
+  const f = S.file;
+  btn.disabled = true;
+  try {
+    const r = await post("/api/file/save", Object.assign(editBody(), { message }));
+    toast(r.commit ? "Сохранено, коммит " + r.commit : "Сохранено");
+    f.ops = []; f.cur = f.orig; f.editMode = "ops";
+    const id = f.id, keepTab = f.tab === "history" ? "keys" : f.tab; S.file = null;
+    await openFile(id);
+    if (S.file && keepTab === "text") { S.file.tab = "text"; renderPanel(); }
+    await loadTree();
+    if (S.searching) runSearch();
+  } catch (e) {
+    btn.disabled = false;
+    if (e.status === 409) { f.diff = null; f.conflict = true; renderPanel(); }
+    else toast(e.message, true);
+  }
+}
+
+/* ------------------------------------------------------------------ boot */
+window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
+
+(async function boot() {
+  try {
+    S.cfg = await api("/api/config");
+    $("#cfg").textContent = S.cfg.base_dir + " · подгруппа «" + S.cfg.subgroup + "» · хосты: " + S.cfg.hosts_file +
+      (S.cfg.git_commit ? " · git-коммиты" : S.cfg.git ? "" : " · без git");
+    await loadTree();
+    fitView();
+  } catch (e) { toast("Не удалось загрузить данные: " + e.message, true); }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# yamlmap settings. Run yamlmap from inside the git repository with the configs:
+#   python /path/to/yamlmap/app.py --config yamlmap.yml
+
+# Directory that holds the groups (relative to the directory yamlmap is started in).
+base_dir: .
+
+# Layout that is scanned:
+#   <base_dir>/<group>/<subgroup>/<sub directories with *.yml|*.yaml>
+#   <base_dir>/<group>/<subgroup>/<hosts_file>
+# Only this one subgroup is shown for every group.
+subgroup: prod
+
+# File with the list of hosts, one per line ('#' starts a comment, first word is the host name).
+# Lives directly in the subgroup directory.
+hosts_file: hosts.txt
+
+# Optional
+extensions: [.yml, .yaml]
+ignore_dirs: [.git, node_modules, __pycache__]
+git_commit: true        # commit every save (only the edited file); false = just write the file
+host: 127.0.0.1         # keep on localhost: the editor has no authentication
+port: 8080

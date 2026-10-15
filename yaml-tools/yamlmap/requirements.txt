@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn>=0.29
+ruamel.yaml>=0.18
+ruamel.yaml.clib; platform_python_implementation == "CPython" and python_version < "3.14"
+# tests only:
+pytest
+httpx
